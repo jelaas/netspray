@@ -232,7 +232,7 @@ int main(int argc, char **argv)
 	/*
 	 */
 	int err = 0;
-	int port = 12345;
+	int port = 1234;
 	int rate = 10;
 	char *bindaddr = NULL;
 	struct in_addr srcaddr;
@@ -246,9 +246,21 @@ int main(int argc, char **argv)
 	usage:
 		printf("netspray [-v] rx|tx IP [IP]*\n"
 		       " -b --bind ADDR  optional bind address\n"
-		       " -v              be verbose\n"
+		       " -v              be verbose (also keeps process in foreground)\n"
 		       " -r --rate       packets per second\n"
-		       " -p --port N     [12345] port number to use\n"
+		       " -p --port N     [1234] port number to use\n"
+		       " -l --loss N     packet loss trigger level [3]\n"
+		       "\n"
+		       "Netspray has two modes: 'rx' and 'tx'\n"
+		       "\n"
+		       "rx mode is the receiver mode.\n"
+		       "The receiver will expect packets from the IP-addresses listed.\n"
+		       "If sequential packet loss is detected the alarm function will trigger.\n"
+		       "\n"
+		       "tx mode is the transmitter mode.\n"
+		       "The transmitter will send packets to all IP-addresses listed at the given rate.\n"
+		       "\n"
+		       "It is possible to bind to an adress that is not (yet) configured on the system.\n"
 			);
 		exit(0);
 	}
@@ -257,6 +269,7 @@ int main(int argc, char **argv)
 	while(jelopt(argv, 'b', "bind", &bindaddr, &err));
 	while(jelopt_int(argv, 'r', "rate", &rate, &err));
 	while(jelopt_int(argv, 'p', "port", &port, &err));
+	while(jelopt_int(argv, 'l', "loss", &conf.nr_allow_loss, &err));
 	argc = jelopt_final(argv, &err);
 	if(err) {
 		fprintf(stderr, "netspray: Syntax error in options.\n");
