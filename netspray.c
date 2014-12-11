@@ -21,6 +21,8 @@
 #include <arpa/inet.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <syslog.h>
+#include <signal.h>
 
 #include "jelist.h"
 #include "jelopt.h"
@@ -43,6 +45,7 @@ struct {
 	int nr_allow_loss;
 	int recoverycount;
 	int foreground;
+	int facility;
 } conf;
 
 void daemonize(void)
@@ -78,7 +81,16 @@ void daemonize(void)
 
 int logmsg(struct ip *ip, char *msg)
 {
+	pid_t pid;
+	
 	if(conf.verbose) fprintf(stderr, "%s: %s\n", inet_ntoa(ip->addr.sin_addr), msg);
+	
+	pid = fork();
+	if(pid == 0) {
+		close(conf.fd);
+		syslog(LOG_ERR, "%s %s", inet_ntoa(ip->addr.sin_addr), msg);
+		_exit(0);
+	}
 	return 0;
 }
 
@@ -270,6 +282,7 @@ int main(int argc, char **argv)
 	struct jlhead *ips;
 
 	ips = jl_new();
+	conf.facility = LOG_DAEMON;
 	conf.nr_allow_loss = 3;
 	conf.recoverycount = 200;
 	srcaddr.s_addr = htonl(INADDR_ANY);
@@ -344,6 +357,16 @@ int main(int argc, char **argv)
 		argc--;
 	}
 
+	{
+		struct sigaction act;
+		memset(&act, 0, sizeof(act));
+		act.sa_handler = SIG_DFL;
+		act.sa_flags = SA_NOCLDSTOP|SA_NOCLDWAIT;
+		sigaction(SIGCHLD, &act, NULL);
+	}
+	
+	openlog("netspray", LOG_PID, conf.facility);
+	
 	{
 		conf.fd = socket( PF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		if(conf.fd == -1) {
