@@ -94,7 +94,9 @@ void receiver(struct jlhead *ips)
 					(struct sockaddr *)&from_addr, &fromlen);
 			if(got < 0) continue;
 			gettimeofday(&ts, NULL);
-			if(conf.verbose) printf("got packet from %u\n", from_addr.sin_addr.s_addr);
+			if(conf.verbose) printf("got packet from %s port %d\n",
+						inet_ntoa(from_addr.sin_addr),
+						from_addr.sin_port);
 			jl_foreach(ips, ip) {
 				if(ip->addr.sin_addr.s_addr == from_addr.sin_addr.s_addr) {
 					ip->count++;
@@ -227,21 +229,27 @@ int main(int argc, char **argv)
 	int err = 0;
 	int port = 12345;
 	int rate = 10;
+	char *bindaddr = NULL;
+	struct in_addr srcaddr;
 	struct jlhead *ips;
+
 	ips = jl_new();
 	conf.nr_allow_loss = 3;
-
+	srcaddr.s_addr = htonl(INADDR_ANY);
+	
 	if(jelopt(argv, 'h', "help", 0, &err)) {
 	usage:
 		printf("netspray [-v] rx|tx IP [IP]*\n"
-		       " -v            be verbose\n"
-		       " -r --rate     packets per second\n"
-		       " -p --port N   [12345] port number to use\n"
+		       " -b --bind ADDR  optional bind address\n"
+		       " -v              be verbose\n"
+		       " -r --rate       packets per second\n"
+		       " -p --port N     [12345] port number to use\n"
 			);
 		exit(0);
 	}
-
+	
 	while(jelopt(argv, 'v', "verbose", 0, &err)) conf.verbose++;
+	while(jelopt(argv, 'b', "bind", &bindaddr, &err));
 	while(jelopt_int(argv, 'r', "rate", &rate, &err));
 	while(jelopt_int(argv, 'p', "port", &port, &err));
 	argc = jelopt_final(argv, &err);
@@ -290,10 +298,20 @@ int main(int argc, char **argv)
 		}
 	}
 
+	if(bindaddr) {
+		int one=1;
+		if(!inet_aton(bindaddr, &srcaddr)) {
+			fprintf(stderr, "Address not valid\n");
+			exit(1);
+		}
+		setsockopt(conf.fd, IPPROTO_IP, IP_FREEBIND, (char *)&one, sizeof(one));
+	}
+
 	if(!strcmp(argv[1], "rx")) {
 		struct sockaddr_in my_addr;
 		memset( &my_addr, 0, sizeof(my_addr));
 		my_addr.sin_family = AF_INET;
+		my_addr.sin_addr.s_addr = srcaddr.s_addr;
 		my_addr.sin_port = htons(port);
 		bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in) );
 
@@ -302,6 +320,13 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 	if(!strcmp(argv[1], "tx")) {
+		struct sockaddr_in my_addr;
+		memset( &my_addr, 0, sizeof(my_addr));
+		my_addr.sin_family = AF_INET;
+		my_addr.sin_addr.s_addr = srcaddr.s_addr;
+		my_addr.sin_port = 0;
+		bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in) );
+		
 		if(!conf.verbose) daemonize();
 		sender(port, ips, rate);
 		exit(1);
