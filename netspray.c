@@ -76,8 +76,17 @@ void daemonize(void)
 	}
 }
 
+int logmsg(struct ip *ip, char *msg)
+{
+	if(conf.verbose) fprintf(stderr, "%s: %s\n", inet_ntoa(ip->addr.sin_addr), msg);
+	return 0;
+}
+
 int ip_status_fail(struct ip *ip)
 {
+	if(ip->fail == 0) logmsg(ip, "connectivity failed");
+	if(ip->fail && ((ip->fail % (conf.recoverycount?conf.recoverycount:100)) == 0))
+		logmsg(ip, "connectivity still failed");
 	ip->fail++;
 	ip->recoverycounter = conf.recoverycount;
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu\n", inet_ntoa(ip->addr.sin_addr), ip->fail);
@@ -86,11 +95,15 @@ int ip_status_fail(struct ip *ip)
 
 int ip_status_ok(struct ip *ip)
 {
+	if(ip->fail) {
+		logmsg(ip, "reconnected");
+	}
 	ip->fail = 0;
 	if(ip->recoverycounter) {
 		ip->recoverycounter--;
 		if(ip->recoverycounter == 0) {
 			if(conf.verbose) fprintf(stderr, "%s: recovered\n", inet_ntoa(ip->addr.sin_addr));
+			logmsg(ip, "connectivity recovered");
 		}
 	}
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu recover=%d\n",
