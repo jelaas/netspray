@@ -1,5 +1,10 @@
 /*
-
+ * File: netspray.c
+ * Implements: network connectivity tester.
+ *
+ * Copyright: Jens Låås Uppsala University, 2014
+ * Copyright license: According to GPL, see file COPYING in this directory.
+ *
  */
 #include <stdio.h>
 #include <string.h>
