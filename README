@@ -1,0 +1,25 @@
+netspray [-v] rx|tx IP [IP]*
+ -b --bind ADDR  optional bind address
+ -v              be verbose (also keeps process in foreground)
+ -r --rate       packets per second [10]
+ -p --port N     port number to use [1234]
+ -l --loss N     packet loss trigger level [3]
+ -R --rcount     recoverycount until recovered [200]
+ -F              stay in foreground (no daemon)
+ -e --exec PRG   run this program to handle events
+
+Netspray has two modes: 'rx' and 'tx'
+
+rx mode is the receiver mode.
+The receiver will expect packets from the IP-addresses listed.
+If sequential packet loss is detected the alarm function will trigger.
+
+tx mode is the transmitter mode.
+The transmitter will send packets to all IP-addresses listed at the given rate.
+
+It is possible to bind to an adress that is not (yet) configured on the system.
+
+Exec program:
+The program/script given to the '-e' switch receives event information in argv.
+ $1 = IP
+ $2 = FAIL|RECONNECT|RECOVER
