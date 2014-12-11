@@ -31,6 +31,7 @@ struct ip {
 	int rate;
 	int pos; /* position in ts array */
 	int last; /* last position */
+	int recoverycounter; /* count down for recovery */
 	uint64_t fail; /* nr of failures detected */
 	uint64_t count; /* total number of packets processed */
 	uint8_t data[4];
@@ -40,6 +41,8 @@ struct {
 	int verbose;
 	int fd;
 	int nr_allow_loss;
+	int recoverycount;
+	int foreground;
 } conf;
 
 void daemonize(void)
@@ -71,6 +74,28 @@ void daemonize(void)
 		}
 		if(fd) close(fd);
 	}
+}
+
+int ip_status_fail(struct ip *ip)
+{
+	ip->fail++;
+	ip->recoverycounter = conf.recoverycount;
+	if(conf.verbose) fprintf(stderr, "%s: fail = %llu\n", inet_ntoa(ip->addr.sin_addr), ip->fail);
+	return ip->fail;
+}
+
+int ip_status_ok(struct ip *ip)
+{
+	ip->fail = 0;
+	if(ip->recoverycounter) {
+		ip->recoverycounter--;
+		if(ip->recoverycounter == 0) {
+			if(conf.verbose) fprintf(stderr, "%s: recovered\n", inet_ntoa(ip->addr.sin_addr));
+		}
+	}
+	if(conf.verbose) fprintf(stderr, "%s: fail = %llu recover=%d\n",
+				 inet_ntoa(ip->addr.sin_addr), ip->fail, ip->recoverycounter);
+	return ip->fail;
 }
 
 void receiver(struct jlhead *ips)
@@ -127,8 +152,7 @@ void receiver(struct jlhead *ips)
 		
 		jl_foreach(ips, ip) {
 			if(ip->count == 0) {
-				ip->fail++;
-				printf("fail = %llu\n", ip->fail);
+				ip_status_fail(ip);
 				continue;
 			}
 			
@@ -150,22 +174,18 @@ void receiver(struct jlhead *ips)
 				if(conf.verbose) printf("ts %lu.%lu\n", ts.tv_sec, ts.tv_usec);
 				if(conf.verbose) printf("cts %lu.%lu\n", cts.tv_sec, cts.tv_usec);
 				if(cts.tv_sec > ts.tv_sec) {
-					ip->fail = 0;
-					printf("fail = %llu\n", ip->fail);
+					ip_status_ok(ip);
 					continue;
 				}
 				if(cts.tv_sec < ts.tv_sec) {
-					ip->fail++;
-					printf("fail = %llu\n", ip->fail);
+					ip_status_fail(ip);
 					continue;
 				}
 				if(cts.tv_usec < ts.tv_usec) {
-                                        ip->fail++;
-					printf("fail = %llu\n", ip->fail);
+					ip_status_fail(ip);
 					continue;
                                 }
-				ip->fail = 0;
-				printf("fail = %llu\n", ip->fail);
+				ip_status_ok(ip);
 			}
 		}
 	}
@@ -229,8 +249,6 @@ void sender(int port, struct jlhead *ips, int rate)
 
 int main(int argc, char **argv)
 {
-	/*
-	 */
 	int err = 0;
 	int port = 1234;
 	int rate = 10;
@@ -240,6 +258,7 @@ int main(int argc, char **argv)
 
 	ips = jl_new();
 	conf.nr_allow_loss = 3;
+	conf.recoverycount = 200;
 	srcaddr.s_addr = htonl(INADDR_ANY);
 	
 	if(jelopt(argv, 'h', "help", 0, &err)) {
@@ -247,9 +266,11 @@ int main(int argc, char **argv)
 		printf("netspray [-v] rx|tx IP [IP]*\n"
 		       " -b --bind ADDR  optional bind address\n"
 		       " -v              be verbose (also keeps process in foreground)\n"
-		       " -r --rate       packets per second\n"
-		       " -p --port N     [1234] port number to use\n"
+		       " -r --rate       packets per second [10]\n"
+		       " -p --port N     port number to use [1234]\n"
 		       " -l --loss N     packet loss trigger level [3]\n"
+		       " -R --rcount     recoverycount until recovered [200]\n"
+		       " -F              stay in foreground (no daemon)\n"
 		       "\n"
 		       "Netspray has two modes: 'rx' and 'tx'\n"
 		       "\n"
@@ -266,10 +287,12 @@ int main(int argc, char **argv)
 	}
 	
 	while(jelopt(argv, 'v', "verbose", 0, &err)) conf.verbose++;
+	while(jelopt(argv, 'F', (void*)0, 0, &err)) conf.foreground=1;
 	while(jelopt(argv, 'b', "bind", &bindaddr, &err));
 	while(jelopt_int(argv, 'r', "rate", &rate, &err));
 	while(jelopt_int(argv, 'p', "port", &port, &err));
 	while(jelopt_int(argv, 'l', "loss", &conf.nr_allow_loss, &err));
+	while(jelopt_int(argv, 'R', "rcount", &conf.recoverycount, &err));
 	argc = jelopt_final(argv, &err);
 	if(err) {
 		fprintf(stderr, "netspray: Syntax error in options.\n");
@@ -291,7 +314,7 @@ int main(int argc, char **argv)
 
 		if(conf.verbose) printf("ip %s rate %d pkts/s\n", argv[argc-1], rate);
 		if(!inet_aton(argv[argc-1], &dst)) {
-			fprintf(stderr, "Address not valid\n");
+			fprintf(stderr, "netspray: Address not valid\n");
 			exit(1);
 		}
 		ip = malloc(sizeof(struct ip));
@@ -311,7 +334,7 @@ int main(int argc, char **argv)
 	{
 		conf.fd = socket( PF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		if(conf.fd == -1) {
-			fprintf(stderr, "socket failed\n");
+			fprintf(stderr, "netspray: UDP socket creation failed\n");
 			exit(2);
 		}
 	}
@@ -319,7 +342,7 @@ int main(int argc, char **argv)
 	if(bindaddr) {
 		int one=1;
 		if(!inet_aton(bindaddr, &srcaddr)) {
-			fprintf(stderr, "Address not valid\n");
+			fprintf(stderr, "netspray: Bind address not valid\n");
 			exit(1);
 		}
 		setsockopt(conf.fd, IPPROTO_IP, IP_FREEBIND, (char *)&one, sizeof(one));
@@ -333,7 +356,7 @@ int main(int argc, char **argv)
 		my_addr.sin_port = htons(port);
 		bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in) );
 
-		if(!conf.verbose) daemonize();
+		if((!conf.verbose) && (!conf.foreground)) daemonize();
 		receiver(ips);
 		exit(1);
 	}
@@ -345,7 +368,7 @@ int main(int argc, char **argv)
 		my_addr.sin_port = 0;
 		bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in) );
 		
-		if(!conf.verbose) daemonize();
+		if((!conf.verbose) && (!conf.foreground)) daemonize();
 		sender(port, ips, rate);
 		exit(1);
 	}
