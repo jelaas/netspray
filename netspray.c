@@ -46,6 +46,7 @@ struct {
 	int recoverycount;
 	int foreground;
 	int facility;
+	char *exec;
 } conf;
 
 void daemonize(void)
@@ -94,9 +95,30 @@ int logmsg(struct ip *ip, char *msg)
 	return 0;
 }
 
+int event(struct ip *ip, char *msg)
+{
+	pid_t pid;
+	
+	pid = fork();
+        if(pid == 0) {
+		char *argv[4];
+                close(conf.fd);
+		argv[0] = conf.exec;
+		argv[1] = inet_ntoa(ip->addr.sin_addr);
+		argv[2] = msg;
+		argv[3] = (void*)0;
+		execv(conf.exec, argv);
+                _exit(0);
+	}
+        return 0;
+}
+
 int ip_status_fail(struct ip *ip)
 {
-	if(ip->fail == 0) logmsg(ip, "connectivity failed");
+	if(ip->fail == 0) {
+		logmsg(ip, "connectivity failed");
+		if(conf.exec) event(ip, "FAIL");
+	}
 	if(ip->fail && ((ip->fail % (conf.recoverycount?conf.recoverycount:100)) == 0))
 		logmsg(ip, "connectivity still failed");
 	ip->fail++;
@@ -109,6 +131,7 @@ int ip_status_ok(struct ip *ip)
 {
 	if(ip->fail) {
 		logmsg(ip, "reconnected");
+		if(conf.exec) event(ip, "RECONNECT");
 	}
 	ip->fail = 0;
 	if(ip->recoverycounter) {
@@ -116,6 +139,7 @@ int ip_status_ok(struct ip *ip)
 		if(ip->recoverycounter == 0) {
 			if(conf.verbose) fprintf(stderr, "%s: recovered\n", inet_ntoa(ip->addr.sin_addr));
 			logmsg(ip, "connectivity recovered");
+			if(conf.exec) event(ip, "RECOVERED");
 		}
 	}
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu recover=%d\n",
@@ -297,6 +321,7 @@ int main(int argc, char **argv)
 		       " -l --loss N     packet loss trigger level [3]\n"
 		       " -R --rcount     recoverycount until recovered [200]\n"
 		       " -F              stay in foreground (no daemon)\n"
+		       " -e --exec PRG   run this program to handle events\n"
 		       "\n"
 		       "Netspray has two modes: 'rx' and 'tx'\n"
 		       "\n"
@@ -308,6 +333,11 @@ int main(int argc, char **argv)
 		       "The transmitter will send packets to all IP-addresses listed at the given rate.\n"
 		       "\n"
 		       "It is possible to bind to an adress that is not (yet) configured on the system.\n"
+		       "\n"
+		       "Exec program:\n"
+		       "The program/script given to the '-e' switch receives event information in argv.\n"
+		       " $1 = IP\n"
+		       " $2 = FAIL|RECONNECT|RECOVER\n"
 			);
 		exit(0);
 	}
@@ -315,6 +345,7 @@ int main(int argc, char **argv)
 	while(jelopt(argv, 'v', "verbose", 0, &err)) conf.verbose++;
 	while(jelopt(argv, 'F', (void*)0, 0, &err)) conf.foreground=1;
 	while(jelopt(argv, 'b', "bind", &bindaddr, &err));
+	while(jelopt(argv, 'e', "exec", &conf.exec, &err));
 	while(jelopt_int(argv, 'r', "rate", &rate, &err));
 	while(jelopt_int(argv, 'p', "port", &port, &err));
 	while(jelopt_int(argv, 'l', "loss", &conf.nr_allow_loss, &err));
@@ -324,7 +355,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "netspray: Syntax error in options.\n");
 		exit(2);
 	}
-
+	
 	if(argc <= 2) {
 		fprintf(stderr, "netspray: unsufficient args.\n");
 		exit(2);
@@ -333,7 +364,7 @@ int main(int argc, char **argv)
 		fprintf(stderr, "netspray: only tx|rx accepted\n");
 		exit(2);
 	}
-
+	
 	while(argc > 2) {
 		struct in_addr dst;
 		struct ip *ip;
@@ -356,7 +387,7 @@ int main(int argc, char **argv)
 		jl_append(ips, ip);
 		argc--;
 	}
-
+	
 	{
 		struct sigaction act;
 		memset(&act, 0, sizeof(act));
@@ -374,7 +405,7 @@ int main(int argc, char **argv)
 			exit(2);
 		}
 	}
-
+	
 	if(bindaddr) {
 		int one=1;
 		if(!inet_aton(bindaddr, &srcaddr)) {
