@@ -2,7 +2,7 @@
  * File: netspray.c
  * Implements: network connectivity tester.
  *
- * Copyright: Jens Låås Uppsala University, 2014
+ * Copyright: Jens Låås, Uppsala University, 2014
  * Copyright license: According to GPL, see file COPYING in this directory.
  *
  */
@@ -33,9 +33,11 @@ struct ip {
 	int rate;
 	int pos; /* position in ts array */
 	int last; /* last position */
-	int recoverycounter; /* count down for recovery */
 	uint64_t fail; /* nr of failures detected */
 	uint64_t count; /* total number of packets processed */
+	struct timeval gracets; /* point in time when grace period expired */
+	struct timeval recoveryts; /* point in time for recovery event */
+	struct timeval gracetime; /* time until grace period has expired*/
 	uint8_t data[4];
 };
 
@@ -43,7 +45,7 @@ struct {
 	int verbose;
 	int fd;
 	int nr_allow_loss;
-	int recoverycount;
+	int recoverytime; /* time after reconnect for recovery */
 	int foreground;
 	int facility;
 	char *exec;
@@ -113,37 +115,38 @@ int event(struct ip *ip, char *msg)
         return 0;
 }
 
-int ip_status_fail(struct ip *ip)
+int ip_status_fail(struct ip *ip, struct timeval *ts)
 {
 	if(ip->fail == 0) {
 		logmsg(ip, "connectivity failed");
 		if(conf.exec) event(ip, "FAIL");
 	}
-	if(ip->fail && ((ip->fail % (conf.recoverycount?conf.recoverycount:100)) == 0))
+	if(ip->fail && ((ts->tv_sec % (conf.recoverytime?conf.recoverytime:60)) == 0))
 		logmsg(ip, "connectivity still failed");
 	ip->fail++;
-	ip->recoverycounter = conf.recoverycount;
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu\n", inet_ntoa(ip->addr.sin_addr), ip->fail);
 	return ip->fail;
 }
 
-int ip_status_ok(struct ip *ip)
+int ip_status_ok(struct ip *ip, struct timeval *ts)
 {
 	if(ip->fail) {
+		memcpy(&ip->recoveryts, ts, sizeof(struct timeval));
+		ip->recoveryts.tv_sec += conf.recoverytime;
 		logmsg(ip, "reconnected");
 		if(conf.exec) event(ip, "RECONNECT");
 	}
 	ip->fail = 0;
-	if(ip->recoverycounter) {
-		ip->recoverycounter--;
-		if(ip->recoverycounter == 0) {
+	if(ip->recoveryts.tv_sec) {
+		if(ip->recoveryts.tv_sec < ts->tv_sec) {
+			memset(&ip->recoveryts, 0, sizeof(struct timeval));
 			if(conf.verbose) fprintf(stderr, "%s: recovered\n", inet_ntoa(ip->addr.sin_addr));
 			logmsg(ip, "connectivity recovered");
 			if(conf.exec) event(ip, "RECOVERED");
 		}
 	}
-	if(conf.verbose) fprintf(stderr, "%s: fail = %llu recover=%d\n",
-				 inet_ntoa(ip->addr.sin_addr), ip->fail, ip->recoverycounter);
+	if(conf.verbose) fprintf(stderr, "%s: fail = %llu recover=%lu\n",
+				 inet_ntoa(ip->addr.sin_addr), ip->fail, ip->recoveryts.tv_sec);
 	return ip->fail;
 }
 
@@ -153,8 +156,9 @@ void receiver(struct jlhead *ips)
 	struct sockaddr_in from_addr;
 	struct ip *ip;
 	unsigned int fromlen;
-	struct timeval ts, checkts;
+	struct timeval ts;
 	int got, rc;
+	int polltimeout = 500;		
 	uint8_t buf[4];
 
 	fromlen = sizeof( from_addr );
@@ -163,11 +167,37 @@ void receiver(struct jlhead *ips)
 	fds[0].events = POLLIN;
 	fds[0].revents = 0;
 
-	gettimeofday(&checkts, NULL);
-	checkts.tv_sec+=5; /* warmup a few seconds */
+	gettimeofday(&ts, NULL);
 
 	while(1) {
-		rc = poll(fds, 1, 500); /* timeout 500ms */
+		polltimeout = 500;
+		/* calculate time left of grace period: set gracetime */
+		jl_foreach(ips, ip) {
+			uint64_t gracetime;
+
+			/* only consider non-failed ips */
+			if(ip->fail) continue;
+
+			/* gracets - now */
+			ip->gracetime.tv_sec = ip->gracets.tv_sec;
+			ip->gracetime.tv_usec = ip->gracets.tv_usec;
+			ip->gracetime.tv_sec -= ts.tv_sec;
+			if(ip->gracetime.tv_usec > ts.tv_usec) {
+				ip->gracetime.tv_usec -= ts.tv_usec;
+			} else {
+				ip->gracetime.tv_sec--;
+				ip->gracetime.tv_usec += (uint64_t)1000000;
+				ip->gracetime.tv_usec -= ts.tv_usec;
+			}
+			gracetime = ip->gracetime.tv_sec * 1000;
+			gracetime += (ip->gracetime.tv_usec / 1000);
+			
+			/* set the lowest polltimeout */
+			if((gracetime >= 0) && (gracetime < polltimeout))
+				polltimeout = gracetime;
+		}
+
+		rc = poll(fds, 1, polltimeout);
 		if( (rc > 0) && fds[0].revents) {
 			got = recvfrom( conf.fd, buf, sizeof(buf), 0,
 					(struct sockaddr *)&from_addr, &fromlen);
@@ -181,10 +211,22 @@ void receiver(struct jlhead *ips)
 					ip->count++;
 					memcpy(&ip->ts[ip->pos], &ts, sizeof(struct timeval));
 					if(conf.verbose) printf("timestamped %lu.%lu\n", ip->ts[ip->pos].tv_sec, ip->ts[ip->pos].tv_usec);
+					if(buf[2]||buf[3])
+						ip->rate = (buf[2] << 8) + buf[3];
+					{
+						uint64_t maxtime;
+						memcpy(&ip->gracets, &ip->ts[ip->last], sizeof(struct timeval));
+						maxtime = ((uint64_t)1000000/ip->rate)*conf.nr_allow_loss;
+						ip->gracets.tv_sec += (maxtime/1000000);
+						ip->gracets.tv_usec += (maxtime%1000000);
+						if(ip->gracets.tv_usec > 1000000) {
+							ip->gracets.tv_usec -= 1000000;
+							ip->gracets.tv_sec++;
+						}
+					}
 					ip->last = ip->pos;
 					ip->pos++;
 					if(ip->pos >= 100) ip->pos = 0;
-					ip->rate = (buf[2] << 8) + buf[3];
 					break;
 				}
 			}
@@ -192,50 +234,28 @@ void receiver(struct jlhead *ips)
 			gettimeofday(&ts, NULL);
 		}
 		
-		/* limit check interval */
-		if(checkts.tv_sec > ts.tv_sec) {
-			continue;
-		}
-		memcpy(&checkts, &ts, sizeof(checkts));
-		checkts.tv_sec++; /* wait one second until next check */
-		
 		jl_foreach(ips, ip) {
 			if(ip->count == 0) {
-				ip_status_fail(ip);
+				ip_status_fail(ip, &ts);
 				continue;
 			}
 			
-			/* compare ts (now) with time of last packet.
-			 *  limit: 1/rate * nr_allow_loss
+			/* 
+			 * have we reach gracets?
 			 */
-			{
-				struct timeval cts;
-				uint64_t maxtime;
-				
-				memcpy(&cts, &ip->ts[ip->last], sizeof(cts));
-				maxtime = ((uint64_t)1000000/ip->rate)*conf.nr_allow_loss;
-				cts.tv_sec += (maxtime/1000000);
-				cts.tv_usec += (maxtime%1000000);
-				if(cts.tv_usec > 1000000) {
-					cts.tv_usec -= 1000000;
-					cts.tv_sec++;
-				}
-				if(conf.verbose) printf("ts %lu.%lu\n", ts.tv_sec, ts.tv_usec);
-				if(conf.verbose) printf("cts %lu.%lu\n", cts.tv_sec, cts.tv_usec);
-				if(cts.tv_sec > ts.tv_sec) {
-					ip_status_ok(ip);
-					continue;
-				}
-				if(cts.tv_sec < ts.tv_sec) {
-					ip_status_fail(ip);
-					continue;
-				}
-				if(cts.tv_usec < ts.tv_usec) {
-					ip_status_fail(ip);
-					continue;
-                                }
-				ip_status_ok(ip);
+			if(ip->gracets.tv_sec > ts.tv_sec) {
+				ip_status_ok(ip, &ts);
+				continue;
 			}
+			if(ip->gracets.tv_sec < ts.tv_sec) {
+				ip_status_fail(ip, &ts);
+				continue;
+				}
+			if(ip->gracets.tv_usec < ts.tv_usec) {
+				ip_status_fail(ip, &ts);
+				continue;
+			}
+			ip_status_ok(ip, &ts);
 		}
 	}
 }
@@ -315,7 +335,7 @@ int main(int argc, char **argv)
 	ips = jl_new();
 	conf.facility = LOG_DAEMON;
 	conf.nr_allow_loss = 3;
-	conf.recoverycount = 200;
+	conf.recoverytime = 200;
 	srcaddr.s_addr = htonl(INADDR_ANY);
 	
 	if(jelopt(argv, 'h', "help", 0, &err)) {
@@ -326,7 +346,7 @@ int main(int argc, char **argv)
 		       " -r --rate       packets per second [10]\n"
 		       " -p --port N     port number to use [1234]\n"
 		       " -l --loss N     packet loss trigger level [3]\n"
-		       " -R --rcount     recoverycount until recovered [200]\n"
+		       " -R --rtime N    recoverytime in seconds after reconnect until recovered [200]\n"
 		       " -F              stay in foreground (no daemon)\n"
 		       " -e --exec PRG   run this program to handle events\n"
 		       "\n"
@@ -356,7 +376,7 @@ int main(int argc, char **argv)
 	while(jelopt_int(argv, 'r', "rate", &rate, &err));
 	while(jelopt_int(argv, 'p', "port", &port, &err));
 	while(jelopt_int(argv, 'l', "loss", &conf.nr_allow_loss, &err));
-	while(jelopt_int(argv, 'R', "rcount", &conf.recoverycount, &err));
+	while(jelopt_int(argv, 'R', "rtime", &conf.recoverytime, &err));
 	argc = jelopt_final(argv, &err);
 	if(err) {
 		fprintf(stderr, "netspray: Syntax error in options.\n");
@@ -391,6 +411,8 @@ int main(int argc, char **argv)
 		ip->data[1] = '1';
 		ip->data[2] = ip->rate >> 8;
 		ip->data[3] = ip->rate & 0xff;
+		gettimeofday(&ip->gracets, NULL);
+		ip->gracets.tv_sec += 5; /* no events for 5 seconds */
 		jl_append(ips, ip);
 		argc--;
 	}
