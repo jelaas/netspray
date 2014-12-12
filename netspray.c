@@ -296,6 +296,13 @@ void sender(int port, struct jlhead *ips, int rate)
 	}
 }
 
+void opensyslog()
+{
+	char buf[64];
+	snprintf(buf, sizeof(buf)-1, "netspray[%d]", getpid());
+	openlog(strdup(buf), 0, conf.facility);
+}
+
 int main(int argc, char **argv)
 {
 	int err = 0;
@@ -396,8 +403,6 @@ int main(int argc, char **argv)
 		sigaction(SIGCHLD, &act, NULL);
 	}
 	
-	openlog("netspray", LOG_PID, conf.facility);
-	
 	{
 		conf.fd = socket( PF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		if(conf.fd == -1) {
@@ -424,6 +429,7 @@ int main(int argc, char **argv)
 		bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in) );
 
 		if((!conf.verbose) && (!conf.foreground)) daemonize();
+		opensyslog();
 		receiver(ips);
 		exit(1);
 	}
@@ -436,6 +442,7 @@ int main(int argc, char **argv)
 		bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in) );
 		
 		if((!conf.verbose) && (!conf.foreground)) daemonize();
+		opensyslog();
 		sender(port, ips, rate);
 		exit(1);
 	}
