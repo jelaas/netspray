@@ -82,32 +82,43 @@ void daemonize(void)
 	}
 }
 
-int logmsg(struct ip *ip, char *msg)
+int logmsg(struct ip *ip, char *msg, struct timeval *ts)
 {
 	pid_t pid;
+	char ats[64];
+	struct tm tm;
 	
-	if(conf.verbose) fprintf(stderr, "%s: %s\n", inet_ntoa(ip->addr.sin_addr), msg);
+	gmtime_r(&ts->tv_sec, &tm);
+	snprintf(ats, sizeof(ats), "%02d:%02d:%02d.%03ld", tm.tm_hour, tm.tm_min, tm.tm_sec, ts->tv_usec/1000);
+	
+	if(conf.verbose) fprintf(stderr, "%s: %s at %s\n", inet_ntoa(ip->addr.sin_addr), msg, ats);
 	
 	pid = fork();
 	if(pid == 0) {
 		close(conf.fd);
-		syslog(LOG_ERR, "%s %s", inet_ntoa(ip->addr.sin_addr), msg);
+		syslog(LOG_ERR, "%s %s at %s", inet_ntoa(ip->addr.sin_addr), msg, ats);
 		_exit(0);
 	}
 	return 0;
 }
 
-int event(struct ip *ip, char *msg)
+int event(struct ip *ip, char *msg, struct timeval *ts)
 {
 	pid_t pid;
+	char ats[64];
+	struct tm tm;
+	
+	gmtime_r(&ts->tv_sec, &tm);
+	snprintf(ats, sizeof(ats), "%02d:%02d:%02d.%03ld", tm.tm_hour, tm.tm_min, tm.tm_sec, ts->tv_usec/1000);
 	
 	pid = fork();
         if(pid == 0) {
-		char *argv[4];
+		char *argv[5];
                 close(conf.fd);
 		argv[0] = conf.exec;
 		argv[1] = inet_ntoa(ip->addr.sin_addr);
 		argv[2] = msg;
+		argv[4] = ats;
 		argv[3] = (void*)0;
 		execv(conf.exec, argv);
                 _exit(0);
@@ -118,11 +129,11 @@ int event(struct ip *ip, char *msg)
 int ip_status_fail(struct ip *ip, struct timeval *ts)
 {
 	if(ip->fail == 0) {
-		logmsg(ip, "connectivity failed");
-		if(conf.exec) event(ip, "FAIL");
+		logmsg(ip, "connectivity failed", ts);
+		if(conf.exec) event(ip, "FAIL", ts);
 	}
 	if(ip->fail && ((ts->tv_sec % (conf.recoverytime?conf.recoverytime:60)) == 0))
-		logmsg(ip, "connectivity still failed");
+		logmsg(ip, "connectivity still failed", ts);
 	ip->fail++;
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu\n", inet_ntoa(ip->addr.sin_addr), ip->fail);
 	return ip->fail;
@@ -133,16 +144,16 @@ int ip_status_ok(struct ip *ip, struct timeval *ts)
 	if(ip->fail) {
 		memcpy(&ip->recoveryts, ts, sizeof(struct timeval));
 		ip->recoveryts.tv_sec += conf.recoverytime;
-		logmsg(ip, "reconnected");
-		if(conf.exec) event(ip, "RECONNECT");
+		logmsg(ip, "reconnected", ts);
+		if(conf.exec) event(ip, "RECONNECT", ts);
 	}
 	ip->fail = 0;
 	if(ip->recoveryts.tv_sec) {
 		if(ip->recoveryts.tv_sec < ts->tv_sec) {
 			memset(&ip->recoveryts, 0, sizeof(struct timeval));
 			if(conf.verbose) fprintf(stderr, "%s: recovered\n", inet_ntoa(ip->addr.sin_addr));
-			logmsg(ip, "connectivity recovered");
-			if(conf.exec) event(ip, "RECOVERED");
+			logmsg(ip, "connectivity recovered", ts);
+			if(conf.exec) event(ip, "RECOVERED", ts);
 		}
 	}
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu recover=%lu\n",
@@ -365,6 +376,7 @@ int main(int argc, char **argv)
 		       "The program/script given to the '-e' switch receives event information in argv.\n"
 		       " $1 = IP\n"
 		       " $2 = FAIL|RECONNECT|RECOVER\n"
+		       " $3 = HH:MM:SS.ms\n"
 			);
 		exit(0);
 	}
