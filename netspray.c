@@ -33,6 +33,7 @@ struct ip {
 	int rate;
 	int pos; /* position in ts array */
 	int last; /* last position */
+	time_t lastreport; /* latest "still failed" sent at this time */
 	uint64_t fail; /* nr of failures detected */
 	uint64_t count; /* total number of packets processed */
 	struct timeval gracets; /* point in time when grace period expired */
@@ -132,8 +133,12 @@ int ip_status_fail(struct ip *ip, struct timeval *ts)
 		logmsg(ip, "connectivity failed", ts);
 		if(conf.exec) event(ip, "FAIL", ts);
 	}
-	if(ip->fail && ((ts->tv_sec % (conf.recoverytime?conf.recoverytime:60)) == 0))
+	if(ip->fail &&
+	   (ts->tv_sec > ip->lastreport) &&
+	   ((ts->tv_sec % (conf.recoverytime?conf.recoverytime:60)) == 0)) {
+		ip->lastreport = ts->tv_sec;
 		logmsg(ip, "connectivity still failed", ts);
+	}
 	ip->fail++;
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu\n", inet_ntoa(ip->addr.sin_addr), ip->fail);
 	return ip->fail;
