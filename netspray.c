@@ -97,7 +97,7 @@ int logmsg(struct ip *ip, char *msg, struct timeval *ts)
 	pid = fork();
 	if(pid == 0) {
 		close(conf.fd);
-		syslog(LOG_ERR, "%s %s at %s", inet_ntoa(ip->addr.sin_addr), msg, ats);
+		syslog(LOG_ERR, "%s %s at UTC %s", inet_ntoa(ip->addr.sin_addr), msg, ats);
 		_exit(0);
 	}
 	return 0;
@@ -110,7 +110,7 @@ int event(struct ip *ip, char *msg, struct timeval *ts)
 	struct tm tm;
 	
 	gmtime_r(&ts->tv_sec, &tm);
-	snprintf(ats, sizeof(ats), "%02d:%02d:%02d.%03ld", tm.tm_hour, tm.tm_min, tm.tm_sec, ts->tv_usec/1000);
+	snprintf(ats, sizeof(ats), "UTC %02d:%02d:%02d.%03ld", tm.tm_hour, tm.tm_min, tm.tm_sec, ts->tv_usec/1000);
 	
 	pid = fork();
         if(pid == 0) {
