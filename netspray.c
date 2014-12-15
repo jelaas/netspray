@@ -92,7 +92,7 @@ int logmsg(struct ip *ip, char *msg, struct timeval *ts)
 	gmtime_r(&ts->tv_sec, &tm);
 	snprintf(ats, sizeof(ats), "%02d:%02d:%02d.%03ld", tm.tm_hour, tm.tm_min, tm.tm_sec, ts->tv_usec/1000);
 	
-	if(conf.verbose) fprintf(stderr, "%s: %s at %s\n", inet_ntoa(ip->addr.sin_addr), msg, ats);
+	if(conf.verbose) fprintf(stderr, "%s: %s at UTC %s\n", inet_ntoa(ip->addr.sin_addr), msg, ats);
 	
 	pid = fork();
 	if(pid == 0) {
