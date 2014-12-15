@@ -201,7 +201,7 @@ void receiver(struct jlhead *ips)
 		if( (rc > 0) && fds[0].revents) {
 			got = recvfrom( conf.fd, buf, sizeof(buf), 0,
 					(struct sockaddr *)&from_addr, &fromlen);
-			if(got < 0) continue;
+			if(got < 4) continue;
 			gettimeofday(&ts, NULL);
 			if(conf.verbose) printf("got packet from %s port %d\n",
 						inet_ntoa(from_addr.sin_addr),
