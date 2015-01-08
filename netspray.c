@@ -185,6 +185,10 @@ void receiver(struct jlhead *ips)
 
 	gettimeofday(&ts, NULL);
 
+	if(conf.exec) {
+		jl_foreach(ips, ip) event(ip, "RESET", ts);
+	}
+	
 	while(1) {
 		polltimeout = 500;
 		/* calculate time left of grace period: set gracetime */
@@ -380,7 +384,8 @@ int main(int argc, char **argv)
 		       "Exec program:\n"
 		       "The program/script given to the '-e' switch receives event information in argv.\n"
 		       " $1 = IP\n"
-		       " $2 = FAIL|RECONNECT|RECOVER\n"
+		       " $2 = RESET|FAIL|RECONNECT|RECOVER\n"
+		       "      RESET is sent at program startup.\n"
 		       " $3 = HH:MM:SS.ms\n"
 			);
 		exit(0);
