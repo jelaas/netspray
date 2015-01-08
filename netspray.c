@@ -186,7 +186,7 @@ void receiver(struct jlhead *ips)
 	gettimeofday(&ts, NULL);
 
 	if(conf.exec) {
-		jl_foreach(ips, ip) event(ip, "RESET", ts);
+		jl_foreach(ips, ip) event(ip, "RESET", &ts);
 	}
 	
 	while(1) {
