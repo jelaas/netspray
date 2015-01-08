@@ -480,8 +480,10 @@ int main(int argc, char **argv)
 		my_addr.sin_family = AF_INET;
 		my_addr.sin_addr.s_addr = srcaddr.s_addr;
 		my_addr.sin_port = htons(port);
-		bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in) );
-
+		if(bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in))) {
+			fprintf(stderr, "netspray: bind failed\n");
+			exit(2);
+		}
 		if((!conf.verbose) && (!conf.foreground)) daemonize();
 		opensyslog();
 		receiver(ips);
@@ -493,8 +495,10 @@ int main(int argc, char **argv)
 		my_addr.sin_family = AF_INET;
 		my_addr.sin_addr.s_addr = srcaddr.s_addr;
 		my_addr.sin_port = 0;
-		bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in) );
-		
+		if(bind(conf.fd, (struct sockaddr *)&my_addr, sizeof( struct sockaddr_in))) {
+			fprintf(stderr, "netspray: bind failed\n");
+                        exit(2);
+                }
 		if((!conf.verbose) && (!conf.foreground)) daemonize();
 		opensyslog();
 		sender(port, ips, rate);
