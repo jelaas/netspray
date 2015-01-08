@@ -27,6 +27,8 @@
 #include "jelist.h"
 #include "jelopt.h"
 
+#define DELAYOK 100000
+
 struct ip {
 	struct sockaddr_in addr;
 	struct timeval ts[100]; /* circular buffer */
@@ -83,7 +85,7 @@ void daemonize(void)
 	}
 }
 
-int logmsg(struct ip *ip, char *msg, struct timeval *ts)
+int logmsg(struct ip *ip, char *msg, struct timeval *ts, long sleepns)
 {
 	pid_t pid;
 	char ats[64];
@@ -96,14 +98,18 @@ int logmsg(struct ip *ip, char *msg, struct timeval *ts)
 	
 	pid = fork();
 	if(pid == 0) {
+		struct timespec req;
 		close(conf.fd);
+		req.tv_sec = 0;
+		req.tv_nsec = sleepns;
+		nanosleep(&req, (void*)0);
 		syslog(LOG_ERR, "%s %s at UTC %s", inet_ntoa(ip->addr.sin_addr), msg, ats);
 		_exit(0);
 	}
 	return 0;
 }
 
-int event(struct ip *ip, char *msg, struct timeval *ts)
+int event(struct ip *ip, char *msg, struct timeval *ts, long sleepns)
 {
 	pid_t pid;
 	char ats[64];
@@ -114,8 +120,12 @@ int event(struct ip *ip, char *msg, struct timeval *ts)
 	
 	pid = fork();
         if(pid == 0) {
+		struct timespec req;
 		char *argv[5];
                 close(conf.fd);
+		req.tv_sec = 0;
+		req.tv_nsec = sleepns;
+                nanosleep(&req, (void*)0);
 		argv[0] = conf.exec;
 		argv[1] = inet_ntoa(ip->addr.sin_addr);
 		argv[2] = msg;
@@ -130,14 +140,14 @@ int event(struct ip *ip, char *msg, struct timeval *ts)
 int ip_status_fail(struct ip *ip, struct timeval *ts)
 {
 	if(ip->fail == 0) {
-		logmsg(ip, "connectivity failed", ts);
-		if(conf.exec) event(ip, "FAIL", ts);
+		logmsg(ip, "connectivity failed", ts, 0);
+		if(conf.exec) event(ip, "FAIL", ts, 0);
 	}
 	if(ip->fail &&
 	   (ts->tv_sec > ip->lastreport) &&
 	   ((ts->tv_sec % (conf.recoverytime?conf.recoverytime:60)) == 0)) {
 		ip->lastreport = ts->tv_sec;
-		logmsg(ip, "connectivity still failed", ts);
+		logmsg(ip, "connectivity still failed", ts, 0);
 	}
 	ip->fail++;
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu\n", inet_ntoa(ip->addr.sin_addr), ip->fail);
@@ -149,16 +159,16 @@ int ip_status_ok(struct ip *ip, struct timeval *ts)
 	if(ip->fail) {
 		memcpy(&ip->recoveryts, ts, sizeof(struct timeval));
 		ip->recoveryts.tv_sec += conf.recoverytime;
-		logmsg(ip, "reconnected", ts);
-		if(conf.exec) event(ip, "RECONNECT", ts);
+		logmsg(ip, "reconnected", ts, DELAYOK);
+		if(conf.exec) event(ip, "RECONNECT", ts, DELAYOK);
 	}
 	ip->fail = 0;
 	if(ip->recoveryts.tv_sec) {
 		if(ip->recoveryts.tv_sec < ts->tv_sec) {
 			memset(&ip->recoveryts, 0, sizeof(struct timeval));
 			if(conf.verbose) fprintf(stderr, "%s: recovered\n", inet_ntoa(ip->addr.sin_addr));
-			logmsg(ip, "connectivity recovered", ts);
-			if(conf.exec) event(ip, "RECOVERED", ts);
+			logmsg(ip, "connectivity recovered", ts, DELAYOK);
+			if(conf.exec) event(ip, "RECOVERED", ts, DELAYOK);
 		}
 	}
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu recover=%lu\n",
@@ -186,7 +196,7 @@ void receiver(struct jlhead *ips)
 	gettimeofday(&ts, NULL);
 
 	if(conf.exec) {
-		jl_foreach(ips, ip) event(ip, "RESET", &ts);
+		jl_foreach(ips, ip) event(ip, "RESET", &ts, DELAYOK);
 	}
 	
 	while(1) {
