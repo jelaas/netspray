@@ -27,7 +27,7 @@
 #include "jelist.h"
 #include "jelopt.h"
 
-#define DELAYOK 100000
+#define DELAYOK 1000000
 
 struct ip {
 	struct sockaddr_in addr;
@@ -98,11 +98,13 @@ int logmsg(struct ip *ip, char *msg, struct timeval *ts, long sleepns)
 	
 	pid = fork();
 	if(pid == 0) {
-		struct timespec req;
 		close(conf.fd);
-		req.tv_sec = 0;
-		req.tv_nsec = sleepns;
-		nanosleep(&req, (void*)0);
+		if(sleepns) {
+			struct timespec req;
+			req.tv_sec = 0;
+			req.tv_nsec = sleepns;
+			nanosleep(&req, (void*)0);
+		}
 		syslog(LOG_ERR, "%s %s at UTC %s", inet_ntoa(ip->addr.sin_addr), msg, ats);
 		_exit(0);
 	}
@@ -120,12 +122,14 @@ int event(struct ip *ip, char *msg, struct timeval *ts, long sleepns)
 	
 	pid = fork();
         if(pid == 0) {
-		struct timespec req;
 		char *argv[5];
                 close(conf.fd);
-		req.tv_sec = 0;
-		req.tv_nsec = sleepns;
-                nanosleep(&req, (void*)0);
+		if(sleepns) {
+			struct timespec req;
+			req.tv_sec = 0;
+			req.tv_nsec = sleepns;
+			nanosleep(&req, (void*)0);
+		}
 		argv[0] = conf.exec;
 		argv[1] = inet_ntoa(ip->addr.sin_addr);
 		argv[2] = msg;
