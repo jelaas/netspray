@@ -27,7 +27,7 @@
 #include "jelist.h"
 #include "jelopt.h"
 
-#define DELAYOK 1000000
+#define DELAYOK 50000000
 
 struct ip {
 	struct sockaddr_in addr;
