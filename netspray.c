@@ -35,13 +35,14 @@ struct ip {
 	int rate;
 	int pos; /* position in ts array */
 	int last; /* last position */
+	int loss; /* last calculated packet loss rate in percent */
 	time_t lastreport; /* latest "still failed" sent at this time */
 	uint64_t fail; /* nr of failures detected */
 	uint64_t count; /* total number of packets processed */
 	struct timeval gracets; /* point in time when grace period expired */
 	struct timeval recoveryts; /* point in time for recovery event */
 	struct timeval gracetime; /* time until grace period has expired*/
-	uint8_t data[4];
+	uint8_t data[4]; /* proto, proto, rate-hi, rate-lo */
 };
 
 struct {
@@ -111,7 +112,7 @@ int logmsg(struct ip *ip, char *msg, struct timeval *ts, long sleepns)
 	return 0;
 }
 
-int event(struct ip *ip, char *msg, struct timeval *ts, long sleepns)
+int event(struct ip *ip, char *msg, struct timeval *ts, long sleepns, char *number)
 {
 	pid_t pid;
 	char ats[64];
@@ -122,7 +123,7 @@ int event(struct ip *ip, char *msg, struct timeval *ts, long sleepns)
 	
 	pid = fork();
         if(pid == 0) {
-		char *argv[5];
+		char *argv[6];
                 close(conf.fd);
 		if(sleepns) {
 			struct timespec req;
@@ -133,8 +134,10 @@ int event(struct ip *ip, char *msg, struct timeval *ts, long sleepns)
 		argv[0] = conf.exec;
 		argv[1] = inet_ntoa(ip->addr.sin_addr);
 		argv[2] = msg;
-		argv[4] = ats;
-		argv[3] = (void*)0;
+		argv[3] = ats;
+		argv[4] = (void*)0;
+		if(number) argv[4] = number;
+		argv[5] = (void*)0;
 		execv(conf.exec, argv);
                 _exit(0);
 	}
@@ -145,7 +148,7 @@ int ip_status_fail(struct ip *ip, struct timeval *ts)
 {
 	if(ip->fail == 0) {
 		logmsg(ip, "connectivity failed", ts, 0);
-		if(conf.exec) event(ip, "FAIL", ts, 0);
+		if(conf.exec) event(ip, "FAIL", ts, 0, (void*)0);
 	}
 	if(ip->fail &&
 	   (ts->tv_sec > ip->lastreport) &&
@@ -164,7 +167,7 @@ int ip_status_ok(struct ip *ip, struct timeval *ts)
 		memcpy(&ip->recoveryts, ts, sizeof(struct timeval));
 		ip->recoveryts.tv_sec += conf.recoverytime;
 		logmsg(ip, "reconnected", ts, DELAYOK);
-		if(conf.exec) event(ip, "RECONNECT", ts, DELAYOK);
+		if(conf.exec) event(ip, "RECONNECT", ts, DELAYOK, (void*)0);
 	}
 	ip->fail = 0;
 	if(ip->recoveryts.tv_sec) {
@@ -172,7 +175,7 @@ int ip_status_ok(struct ip *ip, struct timeval *ts)
 			memset(&ip->recoveryts, 0, sizeof(struct timeval));
 			if(conf.verbose) fprintf(stderr, "%s: recovered\n", inet_ntoa(ip->addr.sin_addr));
 			logmsg(ip, "connectivity recovered", ts, DELAYOK);
-			if(conf.exec) event(ip, "RECOVERED", ts, DELAYOK);
+			if(conf.exec) event(ip, "RECOVERED", ts, DELAYOK, (void*)0);
 		}
 	}
 	if(conf.verbose) fprintf(stderr, "%s: fail = %llu recover=%lu\n",
@@ -180,11 +183,24 @@ int ip_status_ok(struct ip *ip, struct timeval *ts)
 	return ip->fail;
 }
 
+int ip_loss(struct ip *ip, struct timeval *ts)
+{
+	char buf[32];
+	snprintf(buf, sizeof(buf), "current packet loss %2d%%", ip->loss);
+	logmsg(ip, buf, ts, 0);
+	if(conf.exec) {
+		snprintf(buf, sizeof(buf), "%d", ip->loss);
+		event(ip, "LOSS", ts, DELAYOK, buf);
+	}
+	return ip->loss;
+}
+
 void receiver(struct jlhead *ips)
 {
 	struct pollfd fds[2];
 	struct sockaddr_in from_addr;
 	struct ip *ip;
+	struct jliter iter;
 	unsigned int fromlen;
 	struct timeval ts;
 	int got, rc;
@@ -200,13 +216,13 @@ void receiver(struct jlhead *ips)
 	gettimeofday(&ts, NULL);
 
 	if(conf.exec) {
-		jl_foreach(ips, ip) event(ip, "RESET", &ts, DELAYOK);
+		jl_foreach(ips, ip) event(ip, "RESET", &ts, DELAYOK, (void*)0);
 	}
 	
 	while(1) {
 		polltimeout = 500;
 		/* calculate time left of grace period: set gracetime */
-		jl_foreach(ips, ip) {
+		for(ip=jl_iter_init(&iter, ips);ip;ip=jl_iter(&iter)) {
 			uint64_t gracetime;
 
 			/* only consider non-failed ips */
@@ -240,7 +256,7 @@ void receiver(struct jlhead *ips)
 			if(conf.verbose) printf("got packet from %s port %d\n",
 						inet_ntoa(from_addr.sin_addr),
 						from_addr.sin_port);
-			jl_foreach(ips, ip) {
+			for(ip=jl_iter_init(&iter, ips);ip;ip=jl_iter(&iter)) {
 				if(ip->addr.sin_addr.s_addr == from_addr.sin_addr.s_addr) {
 					ip->count++;
 					memcpy(&ip->ts[ip->pos], &ts, sizeof(struct timeval));
@@ -268,7 +284,39 @@ void receiver(struct jlhead *ips)
 			gettimeofday(&ts, NULL);
 		}
 		
-		jl_foreach(ips, ip) {
+		for(ip=jl_iter_init(&iter, ips);ip;ip=jl_iter(&iter)) {
+			int first;
+			uint64_t wt;
+			uint64_t pps;
+			int prevloss;
+			
+			if(ip->count < 100) continue;
+			
+			first = (ip->last + 1) % 100;
+			prevloss = ip->loss;
+			
+			/* window size in time */
+			wt = ip->ts[ip->last].tv_sec - ip->ts[first].tv_sec;
+			wt *= 1000000;
+			if(wt > 0) {
+				wt -= (uint64_t) 1000000;
+				wt += ((ip->ts[ip->last].tv_usec + (uint64_t) 1000000) - ip->ts[first].tv_usec);
+			} else {
+				wt += ip->ts[ip->last].tv_usec - ip->ts[first].tv_usec;
+			}
+			
+			/* nr of packets during window (99) */
+
+			/* pps = 99/time */
+			pps = (99*10000000)/wt;
+			
+			/* loss = 1 - (pps / ip->rate) */
+			ip->loss = 100 - ((pps*10) / ip->rate);
+			if(abs(prevloss - ip->loss) > 1) {
+				ip_loss(ip, &ts);
+			}
+		}
+		for(ip=jl_iter_init(&iter, ips);ip;ip=jl_iter(&iter)) {
 			if(ip->count == 0) {
 				ip_status_fail(ip, &ts);
 				continue;
@@ -444,6 +492,7 @@ int main(int argc, char **argv)
 		ip->addr.sin_port = htons(port);
 		ip->addr.sin_addr.s_addr = dst.s_addr;
 		ip->rate = rate;
+		ip->loss = 0;
 		ip->data[0] = 'n';
 		ip->data[1] = '1';
 		ip->data[2] = ip->rate >> 8;
