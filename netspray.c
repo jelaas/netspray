@@ -329,6 +329,7 @@ void sender(int port, struct jlhead *ips, int rate)
 		if( (now.tv_sec > next.tv_sec) ||
 		    ( (now.tv_sec == next.tv_sec) && (now.tv_usec > next.tv_usec) ) ) {
 			if(conf.verbose) fprintf(stderr, "failed to keep up send rate\n");
+			logmsg(ip, "failed to keep up send rate", &now, 0);
 			memcpy(&next, &now, sizeof(now));
 			continue;
 		}
