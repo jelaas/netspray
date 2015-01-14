@@ -513,11 +513,13 @@ int main(int argc, char **argv)
 	}
 	
 	{
+		int one = 1;
 		conf.fd = socket( PF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		if(conf.fd == -1) {
 			fprintf(stderr, "netspray: UDP socket creation failed\n");
 			exit(2);
 		}
+		setsockopt(conf.fd, SOL_SOCKET, SO_REUSEADDR, (char *)&one, sizeof(one));
 	}
 	
 	if(bindaddr) {
