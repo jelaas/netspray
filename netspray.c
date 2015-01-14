@@ -447,9 +447,10 @@ int main(int argc, char **argv)
 		       "Exec program:\n"
 		       "The program/script given to the '-e' switch receives event information in argv.\n"
 		       " $1 = IP\n"
-		       " $2 = RESET|FAIL|RECONNECT|RECOVER\n"
+		       " $2 = RESET|FAIL|RECONNECT|RECOVER|LOSS\n"
 		       "      RESET is sent at program startup.\n"
 		       " $3 = HH:MM:SS.ms\n"
+		       " $4 = (LOSS PERCENTAGE)\n"
 			);
 		exit(0);
 	}
